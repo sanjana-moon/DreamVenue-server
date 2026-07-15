@@ -36,7 +36,11 @@ const client = new MongoClient(uri, {
 });
 
 const JWKS = createRemoteJWKSet(
-    new URL(`${process.env.CLIENT_URL}/api/auth/jwks`)
+    new URL(`${process.env.CLIENT_URL}/api/auth/jwks`),
+    {
+        timeoutDuration: 10000,
+        cooldownDuration: 30000,
+    }
 );
 
 // ============================
@@ -50,16 +54,26 @@ type UserRole = "customer" | "vendor" | "admin";
 
 interface Venue {
     _id?: ObjectId;
+
     name: string;
     location: string;
     category: string;
+
     pricePerEvent: number;
+    capacity: number;
+
+    description: string;
+    image: string;
+
     vendorEmail: string;
+
     approvalStatus: ApprovalStatus;
     publishStatus: PublishStatus;
+
     avgRating: number;
     reviewCount: number;
     bookingCount?: number;
+
     createdAt: Date;
 }
 
@@ -141,7 +155,6 @@ const verifyToken = async (
         req.user = payload;
         next();
     } catch (error) {
-        console.log(error, "error");
         res.status(403).json({ message: "Forbidden" });
     }
 };
@@ -187,7 +200,6 @@ app.get("/api/venues", async (req: Request, res: Response) => {
 
         const query: Record<string, unknown> = {
             approvalStatus: "approved",
-            publishStatus: "published",
         };
 
         if (search) {
@@ -315,35 +327,33 @@ app.post('/api/venues', verifyToken, async (req: Request, res: Response) => {
 }
 );
 
-app.patch('/api/venues/:id', verifyToken, async (req: AuthenticatedRequest, res: Response) => {
-    const { id } = req.params;
-    const updatedData = req.body as Partial<Venue>;
+app.patch("/api/venues/:id", verifyToken, async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const updatedData = req.body as Partial<Venue>;
 
-    const venue = await venueCollection.findOne({ _id: new ObjectId(id as string) });
-
-    if (!venue) {
-        res.status(404).send({ message: "Venue not found" });
-        return;
-    }
-
-    if (venue.vendorEmail !== req.user?.email) {
-        res.status(403).send({ message: "Not authorized to edit this venue" });
-        return;
-    }
-
-    const result = await venueCollection.updateOne(
-        { _id: new ObjectId(id as string) },
-        {
-            $set: {
-                ...updatedData,
-                pricePerEvent: Number(updatedData.pricePerEvent),
+        const result = await venueCollection.updateOne(
+            {
+                _id: new ObjectId(id as string),
             },
-        }
-    );
+            {
+                $set: {
+                    ...updatedData,
+                    pricePerEvent: Number(updatedData.pricePerEvent),
+                    capacity: Number(updatedData.capacity),
+                },
+            }
+        );
 
-    res.send(result);
-}
-);
+        res.send(result);
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).send({
+            message: "Failed to update venue",
+        });
+    }
+});
 
 app.delete('/api/venues/:id', verifyToken, async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
@@ -518,7 +528,6 @@ app.post("/api/bookings", async (req: Request, res: Response) => {
             paymentStatus: string;
         };
 
-        // Prevent duplicate payment processing
         const existingPayment =
             await paymentCollection.findOne({
                 transactionId,
@@ -530,7 +539,6 @@ app.post("/api/bookings", async (req: Request, res: Response) => {
             });
         }
 
-        // Prevent double booking
         const conflict =
             await bookingCollection.findOne({
                 venueId,
@@ -1056,6 +1064,31 @@ app.patch("/api/admin/venues/:id/publish", async (req: Request, res: Response) =
     }
 });
 
+app.delete("/api/admin/venues/:id", verifyToken, async (req: Request, res: Response) => {
+    try {
+        const id = req.params.id as string;
+
+        const result = await venueCollection.deleteOne({
+            _id: new ObjectId(id),
+        });
+
+        if (result.deletedCount === 0) {
+            return res.status(404).send({
+                message: "Venue not found",
+            });
+        }
+
+        res.send(result);
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).send({
+            message: "Failed to delete venue",
+        });
+    }
+}
+);
+
 app.get("/api/admin/users", async (req: Request, res: Response) => {
     try {
         const users = await usersCollection
@@ -1112,13 +1145,25 @@ app.patch("/api/admin/users/:id/block", verifyToken, async (req: Request, res: R
 
 app.delete("/api/admin/users/:id", verifyToken, async (req: Request, res: Response) => {
     try {
-        const { id } = req.params;
+        const id = req.params.id as string;
 
-        await usersCollection.deleteOne({ _id: new ObjectId(id as string) });
+        const result = await usersCollection.deleteOne({
+            _id: new ObjectId(id),
+        });
 
-        res.send({ success: true });
-    } catch (err) {
-        res.status(500).send({ message: "Failed to delete user" });
+        if (result.deletedCount === 0) {
+            return res.status(404).send({
+                message: "User not found",
+            });
+        }
+
+        res.send(result);
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).send({
+            message: "Failed to delete user",
+        });
     }
 }
 );
@@ -1258,14 +1303,17 @@ app.delete("/api/admin/bookings/:id", verifyToken, async (req: Request, res: Res
     try {
         const id = req.params.id as string;
 
-        await bookingCollection.deleteOne({
+        const result = await bookingCollection.deleteOne({
             _id: new ObjectId(id),
         });
 
-        res.send({
-            success: true,
-        });
+        if (result.deletedCount === 0) {
+            return res.status(404).send({
+                message: "Booking not found",
+            });
+        }
 
+        res.send(result);
     } catch (error) {
         console.error(error);
 

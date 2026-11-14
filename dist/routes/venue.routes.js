@@ -1,0 +1,13 @@
+import { Router } from "express";
+import { verifyToken } from "../middleware/auth.js";
+import * as venueController from "../controllers/venue.controller.js";
+const router = Router();
+router.get("/venues", venueController.getVenues);
+router.get("/venues/:id/booked-dates", venueController.getBookedDates);
+router.get("/single-venue/:id", venueController.getSingleVenue);
+router.get("/venues/vendor/:email", verifyToken, venueController.getVendorVenues);
+router.post("/venues", verifyToken, venueController.createVenue);
+router.patch("/venues/:id", verifyToken, venueController.updateVenue);
+router.delete("/venues/:id", verifyToken, venueController.deleteVenue);
+router.get("/venues/:id", venueController.getSingleVenue);
+export default router;
